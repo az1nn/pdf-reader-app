@@ -1,12 +1,12 @@
-const fs = require("fs");
-const path = require("path");
-const { spawn } = require("child_process");
-const { Readable } = require("stream");
-const { pipeline } = require("stream/promises");
+import * as fs from "fs";
+import * as path from "path";
+import { spawn, type ChildProcess } from "child_process";
+import { Readable } from "stream";
+import { pipeline } from "stream/promises";
 
-let metroProcess = null;
+let metroProcess: ChildProcess | null = null;
 
-function exitWithError(message) {
+function exitWithError(message: string): never {
   console.error(message);
   if (metroProcess) {
     metroProcess.kill();
@@ -28,7 +28,7 @@ function setupSignalHandlers() {
   process.on("SIGHUP", cleanup);
 }
 
-function stripProtocol(domain) {
+function stripProtocol(domain: string): string {
   let urlString = domain.trim();
 
   if (!/^https?:\/\//i.test(urlString)) {
@@ -38,27 +38,16 @@ function stripProtocol(domain) {
   return new URL(urlString).host;
 }
 
-function getDeploymentDomain() {
-  // Check Replit deployment environment variables first
-  if (process.env.REPLIT_INTERNAL_APP_DOMAIN) {
-    return stripProtocol(process.env.REPLIT_INTERNAL_APP_DOMAIN);
-  }
-
-  if (process.env.REPLIT_DEV_DOMAIN) {
-    return stripProtocol(process.env.REPLIT_DEV_DOMAIN);
-  }
-
+function getDeploymentDomain(): string {
   if (process.env.EXPO_PUBLIC_DOMAIN) {
     return stripProtocol(process.env.EXPO_PUBLIC_DOMAIN);
   }
 
-  console.error(
-    "ERROR: No deployment domain found. Set REPLIT_INTERNAL_APP_DOMAIN, REPLIT_DEV_DOMAIN, or EXPO_PUBLIC_DOMAIN",
-  );
+  console.error("ERROR: No deployment domain found. Set EXPO_PUBLIC_DOMAIN");
   process.exit(1);
 }
 
-function prepareDirectories(timestamp) {
+function prepareDirectories(timestamp: string) {
   console.log("Preparing build directories...");
 
   if (fs.existsSync("static-build")) {
@@ -94,7 +83,7 @@ function clearMetroCache() {
   console.log("Cache cleared");
 }
 
-async function checkMetroHealth() {
+async function checkMetroHealth(): Promise<boolean> {
   try {
     const response = await fetch("http://localhost:8081/status", {
       signal: AbortSignal.timeout(5000),
@@ -105,7 +94,7 @@ async function checkMetroHealth() {
   }
 }
 
-async function startMetro(expoPublicDomain) {
+async function startMetro(expoPublicDomain: string) {
   const isRunning = await checkMetroHealth();
   if (isRunning) {
     console.log("Metro already running");
@@ -125,13 +114,13 @@ async function startMetro(expoPublicDomain) {
   });
 
   if (metroProcess.stdout) {
-    metroProcess.stdout.on("data", (data) => {
+    metroProcess.stdout.on("data", (data: Buffer) => {
       const output = data.toString().trim();
       if (output) console.log(`[Metro] ${output}`);
     });
   }
   if (metroProcess.stderr) {
-    metroProcess.stderr.on("data", (data) => {
+    metroProcess.stderr.on("data", (data: Buffer) => {
       const output = data.toString().trim();
       if (output) console.error(`[Metro Error] ${output}`);
     });
@@ -151,7 +140,7 @@ async function startMetro(expoPublicDomain) {
   process.exit(1);
 }
 
-async function downloadFile(url, outputPath) {
+async function downloadFile(url: string, outputPath: string) {
   const controller = new AbortController();
   const fiveMinMS = 5 * 60 * 1_000;
   const timeoutId = setTimeout(() => controller.abort(), fiveMinMS);
@@ -165,7 +154,7 @@ async function downloadFile(url, outputPath) {
     }
 
     const file = fs.createWriteStream(outputPath);
-    await pipeline(Readable.fromWeb(response.body), file);
+    await pipeline(Readable.fromWeb(response.body as never), file);
 
     const fileSize = fs.statSync(outputPath).size;
 
@@ -173,12 +162,12 @@ async function downloadFile(url, outputPath) {
       fs.unlinkSync(outputPath);
       throw new Error("Downloaded file is empty");
     }
-  } catch (error) {
+  } catch (error: unknown) {
     if (fs.existsSync(outputPath)) {
       fs.unlinkSync(outputPath);
     }
 
-    if (error.name === "AbortError") {
+    if (error instanceof Error && error.name === "AbortError") {
       throw new Error(`Download timeout after 5m: ${url}`);
     }
     throw error;
@@ -187,9 +176,10 @@ async function downloadFile(url, outputPath) {
   }
 }
 
-async function downloadBundle(platform, timestamp) {
-  // For expo-router apps, the entry is node_modules/expo-router/entry
-  const url = new URL("http://localhost:8081/node_modules/expo-router/entry.bundle");
+async function downloadBundle(platform: string, timestamp: string) {
+  const url = new URL(
+    "http://localhost:8081/node_modules/expo-router/entry.bundle",
+  );
   url.searchParams.set("platform", platform);
   url.searchParams.set("dev", "false");
   url.searchParams.set("hot", "false");
@@ -211,7 +201,20 @@ async function downloadBundle(platform, timestamp) {
   console.log(`${platform} bundle ready`);
 }
 
-async function downloadManifest(platform) {
+interface Manifest {
+  launchAsset: { url: string; key: string };
+  extra: {
+    expoClient: { hostUri: string };
+    expoGo: {
+      debuggerHost: string;
+      packagerOpts: { dev: boolean };
+    };
+  };
+  createdAt: string;
+  assets?: Array<{ url?: string; hash?: string }>;
+}
+
+async function downloadManifest(platform: string): Promise<Manifest> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 300_000);
 
@@ -226,11 +229,11 @@ async function downloadManifest(platform) {
       throw new Error(`HTTP ${response.status}`);
     }
 
-    const manifest = await response.json();
+    const manifest = (await response.json()) as Manifest;
     console.log(`${platform} manifest ready`);
     return manifest;
-  } catch (error) {
-    if (error.name === "AbortError") {
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === "AbortError") {
       throw new Error(
         `Manifest download timeout after 5m for platform: ${platform}`,
       );
@@ -241,7 +244,14 @@ async function downloadManifest(platform) {
   }
 }
 
-async function downloadBundlesAndManifests(timestamp) {
+interface Manifests {
+  ios: Manifest;
+  android: Manifest;
+}
+
+async function downloadBundlesAndManifests(
+  timestamp: string,
+): Promise<Manifests> {
   console.log("Downloading bundles and manifests...");
   console.log("This may take several minutes for production builds...");
 
@@ -255,35 +265,57 @@ async function downloadBundlesAndManifests(timestamp) {
 
     const failures = results
       .map((result, index) => ({ result, index }))
-      .filter(({ result }) => result.status === "rejected");
+      .filter(
+        (item): item is { result: PromiseRejectedResult; index: number } =>
+          item.result.status === "rejected",
+      );
 
     if (failures.length > 0) {
-      const errorMessages = failures.map(({ result, index }) => {
-        const names = [
-          "iOS bundle",
-          "Android bundle",
-          "iOS manifest",
-          "Android manifest",
-        ];
-        return `  - ${names[index]}: ${result.reason?.message || result.reason}`;
-      });
+      const names = [
+        "iOS bundle",
+        "Android bundle",
+        "iOS manifest",
+        "Android manifest",
+      ];
+      const errorMessages = failures.map(
+        ({ result, index }) =>
+          `  - ${names[index]}: ${result.reason?.message || result.reason}`,
+      );
 
       exitWithError(`Download failed:\n${errorMessages.join("\n")}`);
     }
 
     const iosManifest =
-      results[2].status === "fulfilled" ? results[2].value : null;
+      results[2].status === "fulfilled"
+        ? (results[2].value as Manifest)
+        : null;
     const androidManifest =
-      results[3].status === "fulfilled" ? results[3].value : null;
+      results[3].status === "fulfilled"
+        ? (results[3].value as Manifest)
+        : null;
+
+    if (!iosManifest || !androidManifest) {
+      exitWithError("Failed to download manifests");
+    }
 
     console.log("All downloads completed successfully");
     return { ios: iosManifest, android: androidManifest };
-  } catch (error) {
-    exitWithError(`Unexpected download error: ${error.message}`);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    exitWithError(`Unexpected download error: ${message}`);
   }
 }
 
-function extractAssets(timestamp) {
+interface Asset {
+  url: string;
+  originalPath: string;
+  filename: string;
+  relativePath: string;
+  hash: string;
+  platforms: Set<string>;
+}
+
+function extractAssets(timestamp: string): Asset[] {
   const bundles = {
     ios: fs.readFileSync(
       path.join(
@@ -311,11 +343,11 @@ function extractAssets(timestamp) {
     ),
   };
 
-  const assetsMap = new Map();
+  const assetsMap = new Map<string, Asset>();
   const assetPattern =
     /httpServerLocation:"([^"]+)"[^}]*hash:"([^"]+)"[^}]*name:"([^"]+)"[^}]*type:"([^"]+)"/g;
 
-  const extractFromBundle = (bundle, platform) => {
+  const extractFromBundle = (bundle: string, platform: string) => {
     for (const match of bundle.matchAll(assetPattern)) {
       const originalPath = match[1];
       const filename = match[3] + "." + match[4];
@@ -331,7 +363,7 @@ function extractAssets(timestamp) {
       const key = path.posix.join(decodedPath, filename);
 
       if (!assetsMap.has(key)) {
-        const asset = {
+        const asset: Asset = {
           url: path.posix.join("/", decodedPath, filename),
           originalPath: originalPath,
           filename: filename,
@@ -342,7 +374,7 @@ function extractAssets(timestamp) {
 
         assetsMap.set(key, asset);
       }
-      assetsMap.get(key).platforms.add(platform);
+      assetsMap.get(key)!.platforms.add(platform);
     }
   };
 
@@ -352,14 +384,17 @@ function extractAssets(timestamp) {
   return Array.from(assetsMap.values());
 }
 
-async function downloadAssets(assets, timestamp) {
+async function downloadAssets(
+  assets: Asset[],
+  timestamp: string,
+): Promise<number> {
   if (assets.length === 0) {
     return 0;
   }
 
   console.log("Downloading assets...");
   let successCount = 0;
-  const failures = [];
+  const failures: Array<{ filename: string; error: string; url: string }> = [];
 
   const downloadPromises = assets.map(async (asset) => {
     const platform = Array.from(asset.platforms)[0];
@@ -392,10 +427,11 @@ async function downloadAssets(assets, timestamp) {
     try {
       await downloadFile(metroUrl.toString(), output);
       successCount++;
-    } catch (error) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
       failures.push({
         filename: asset.filename,
-        error: error.message,
+        error: message,
         url: metroUrl.toString(),
       });
     }
@@ -416,8 +452,8 @@ async function downloadAssets(assets, timestamp) {
   return successCount;
 }
 
-function updateBundleUrls(timestamp, baseUrl) {
-  const updateForPlatform = (platform) => {
+function updateBundleUrls(timestamp: string, baseUrl: string) {
+  const updateForPlatform = (platform: string) => {
     const bundlePath = path.join(
       "static-build",
       timestamp,
@@ -431,7 +467,7 @@ function updateBundleUrls(timestamp, baseUrl) {
 
     bundle = bundle.replace(
       /httpServerLocation:"(\/[^"]+)"/g,
-      (_match, capturedPath) => {
+      (_match: string, capturedPath: string) => {
         const tempUrl = new URL(`http://localhost:8081${capturedPath}`);
         const unstablePath = tempUrl.searchParams.get("unstable_path");
 
@@ -454,8 +490,13 @@ function updateBundleUrls(timestamp, baseUrl) {
   console.log("Updated bundle URLs");
 }
 
-function updateManifests(manifests, timestamp, baseUrl, assetsByHash) {
-  const updateForPlatform = (platform, manifest) => {
+function updateManifests(
+  manifests: Manifests,
+  timestamp: string,
+  baseUrl: string,
+  assetsByHash: Map<string, { relativePath: string; filename: string }>,
+) {
+  const updateForPlatform = (platform: string, manifest: Manifest) => {
     if (!manifest.launchAsset || !manifest.extra) {
       exitWithError(`Malformed manifest for ${platform}`);
     }
@@ -512,7 +553,7 @@ async function main() {
 
   const downloadTimeout = 300000;
   const downloadPromise = downloadBundlesAndManifests(timestamp);
-  const timeoutPromise = new Promise((_, reject) => {
+  const timeoutPromise = new Promise<never>((_, reject) => {
     setTimeout(() => {
       reject(
         new Error(
@@ -529,7 +570,10 @@ async function main() {
   const assets = extractAssets(timestamp);
   console.log("Found", assets.length, "unique asset(s)");
 
-  const assetsByHash = new Map();
+  const assetsByHash = new Map<
+    string,
+    { relativePath: string; filename: string }
+  >();
   for (const asset of assets) {
     assetsByHash.set(asset.hash, {
       relativePath: asset.relativePath,
@@ -554,8 +598,9 @@ async function main() {
   process.exit(0);
 }
 
-main().catch((error) => {
-  console.error("Build failed:", error.message);
+main().catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error("Build failed:", message);
   if (metroProcess) {
     metroProcess.kill();
   }
