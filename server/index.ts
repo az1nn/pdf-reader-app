@@ -17,13 +17,9 @@ function setupCors(app: express.Application) {
   app.use((req, res, next) => {
     const origins = new Set<string>();
 
-    if (process.env.REPLIT_DEV_DOMAIN) {
-      origins.add(`https://${process.env.REPLIT_DEV_DOMAIN}`);
-    }
-
-    if (process.env.REPLIT_DOMAINS) {
-      process.env.REPLIT_DOMAINS.split(",").forEach((d) => {
-        origins.add(`https://${d.trim()}`);
+    if (process.env.ALLOWED_ORIGINS) {
+      process.env.ALLOWED_ORIGINS.split(",").forEach((d) => {
+        origins.add(d.trim());
       });
     }
 
@@ -225,26 +221,29 @@ function setupErrorHandler(app: express.Application) {
   });
 }
 
-(async () => {
-  setupCors(app);
-  setupBodyParsing(app);
-  setupRequestLogging(app);
+setupCors(app);
+setupBodyParsing(app);
+setupRequestLogging(app);
 
-  configureExpoAndLanding(app);
+configureExpoAndLanding(app);
+setupErrorHandler(app);
 
-  const server = await registerRoutes(app);
+export { app };
 
-  setupErrorHandler(app);
+if (process.env.VERCEL !== "1") {
+  (async () => {
+    const server = await registerRoutes(app);
 
-  const port = parseInt(process.env.PORT || "5000", 10);
-  server.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
-    () => {
-      log(`express server serving on port ${port}`);
-    },
-  );
-})();
+    const port = parseInt(process.env.PORT || "5000", 10);
+    server.listen(
+      {
+        port,
+        host: "0.0.0.0",
+        reusePort: true,
+      },
+      () => {
+        log(`express server serving on port ${port}`);
+      },
+    );
+  })();
+}
